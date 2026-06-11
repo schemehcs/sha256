@@ -2,6 +2,7 @@ use chunk_buf::{Chunk, ChunkBuf};
 use std::ops::AddAssign;
 
 pub const HASH_LEN: usize = 32;
+pub const BLOCK_LEN: usize = 64;
 pub type Hash = [u8; HASH_LEN];
 
 static K: [u32; 64] = [
