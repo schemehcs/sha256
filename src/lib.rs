@@ -2,7 +2,7 @@ use chunk_buf::{Chunk, ChunkBuf};
 use std::ops::AddAssign;
 
 pub const HASH_LEN: usize = 32;
-pub type HASH = [u8; HASH_LEN];
+pub type Hash = [u8; HASH_LEN];
 
 static K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -85,7 +85,7 @@ impl Vars {
         self.add_assign(cln);
     }
 
-    pub fn digest(&self) -> HASH {
+    pub fn digest(&self) -> Hash {
         self.a
             .to_be_bytes()
             .into_iter()
@@ -176,7 +176,7 @@ impl State {
         self.vars.update(&self.work);
     }
 
-    pub fn finish(&mut self, n: u32, byte_len: usize) -> HASH {
+    pub fn finish(&mut self, n: u32, byte_len: usize) -> Hash {
         self.update(n);
         if self.cursor <= 14 {
             self.work[self.cursor..14].fill(0);
@@ -326,7 +326,13 @@ impl Sha256 {
     }
 }
 
-pub fn sha256(msg: &[u8]) -> HASH {
+#[inline]
+pub fn digest(msg: &[u8]) -> Hash {
+    Sha256::new().write(msg).finish()
+}
+
+#[deprecated]
+pub fn sha256(msg: &[u8]) -> Hash {
     Sha256::new().write(msg).finish()
 }
 
@@ -337,7 +343,7 @@ mod tests {
     #[test]
     fn len0_string() {
         let empty: [u8; 0] = [];
-        let digest = sha256(&empty);
+        let digest = digest(&empty);
         let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         assert_eq!(expected, hex::encode(digest));
     }
@@ -346,7 +352,7 @@ mod tests {
     fn len1_string() {
         let msg = "H".as_bytes();
         let expected = "44bd7ae60f478fae1061e11a7739f4b94d1daf917982d33b6fc8a01a63f89c21";
-        let digest = sha256(msg);
+        let digest = digest(msg);
         assert_eq!(expected, hex::encode(digest));
     }
 
@@ -362,7 +368,7 @@ mod tests {
                         315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd"
             .as_bytes();
         let expected = "fc1c3103cc791e104373c82520c42cb5266850c8d0504da922b982abe9cc6452";
-        let digest = sha256(msg);
+        let digest = digest(msg);
         assert_eq!(expected, hex::encode(digest));
     }
 
@@ -378,7 +384,7 @@ mod tests {
                         315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3"
             .as_bytes();
         let expected = "0b221c1e7ae3b092e85829eecbe51205947044701dfa05b7c6f0759b207cebea";
-        let digest = sha256(msg);
+        let digest = digest(msg);
         assert_eq!(expected, hex::encode(digest));
     }
 
@@ -395,7 +401,7 @@ mod tests {
                         3"
         .as_bytes();
         let expected = "e39db0e4cc4d81ff74f04dda25d5e2ca3866776d2396fa6e73df1e94d2c14b70";
-        let digest = sha256(msg);
+        let digest = digest(msg);
         assert_eq!(expected, hex::encode(digest));
     }
 }
