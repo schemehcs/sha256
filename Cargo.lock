@@ -3,6 +3,11 @@
 version = 4
 
 [[package]]
+name = "chunk-buf"
+version = "0.1.0"
+source = "git+https://github.com/schemehcs/chunk-buf.git#4e4e696e9ab6f4fc8d5f7c1c901c06bee7b73b0f"
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12,5 +17,6 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "sha256"
 version = "0.1.0"
 dependencies = [
+ "chunk-buf",
  "hex",
 ]

@@ -1,3 +1,6 @@
+use chunk_buf::{Chunk, ChunkBuf};
+use std::ops::AddAssign;
+
 static K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -9,111 +12,319 @@ static K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
+#[derive(Clone)]
+struct Vars {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+    e: u32,
+    f: u32,
+    g: u32,
+    h: u32,
+}
+
+impl Default for Vars {
+    fn default() -> Self {
+        Self {
+            a: 0x6a09e667,
+            b: 0xbb67ae85,
+            c: 0x3c6ef372,
+            d: 0xa54ff53a,
+            e: 0x510e527f,
+            f: 0x9b05688c,
+            g: 0x1f83d9ab,
+            h: 0x5be0cd19,
+        }
+    }
+}
+
+// clear memory footprint
+impl Drop for Vars {
+    fn drop(&mut self) {
+        self.a = 0;
+        self.b = 0;
+        self.c = 0;
+        self.d = 0;
+        self.e = 0;
+        self.f = 0;
+        self.g = 0;
+        self.h = 0;
+    }
+}
+
+impl Vars {
+    pub fn roll(&mut self, work: &[u32; 64]) {
+        let mut t1: u32;
+        let mut t2: u32;
+        for i in 0..64 {
+            t1 = self
+                .h
+                .wrapping_add(Self::bsig1(self.e))
+                .wrapping_add(Self::ch(self.e, self.f, self.g))
+                .wrapping_add(K[i])
+                .wrapping_add(work[i]);
+            t2 = Self::bsig0(self.a).wrapping_add(Self::maj(self.a, self.b, self.c));
+            self.h = self.g;
+            self.g = self.f;
+            self.f = self.e;
+            self.e = self.d.wrapping_add(t1);
+            self.d = self.c;
+            self.c = self.b;
+            self.b = self.a;
+            self.a = t1.wrapping_add(t2);
+        }
+    }
+
+    pub fn update(&mut self, work: &[u32; 64]) {
+        let mut cln = self.clone();
+        cln.roll(work);
+        self.add_assign(cln);
+    }
+
+    pub fn digest(&self) -> [u8; 32] {
+        self.a
+            .to_be_bytes()
+            .into_iter()
+            .chain(self.b.to_be_bytes())
+            .chain(self.c.to_be_bytes())
+            .chain(self.d.to_be_bytes())
+            .chain(self.e.to_be_bytes())
+            .chain(self.f.to_be_bytes())
+            .chain(self.g.to_be_bytes())
+            .chain(self.h.to_be_bytes())
+            .collect::<Vec<u8>>()
+            .try_into()
+            .unwrap()
+    }
+
+    fn ch(x: u32, y: u32, z: u32) -> u32 {
+        (x & y) ^ (!x & z)
+    }
+
+    fn maj(x: u32, y: u32, z: u32) -> u32 {
+        (x & y) ^ (x & z) ^ (y & z)
+    }
+
+    fn bsig0(x: u32) -> u32 {
+        x.rotate_right(2) ^ x.rotate_right(13) ^ x.rotate_right(22)
+    }
+
+    fn bsig1(x: u32) -> u32 {
+        x.rotate_right(6) ^ x.rotate_right(11) ^ x.rotate_right(25)
+    }
+}
+
+impl AddAssign for Vars {
+    fn add_assign(&mut self, rhs: Self) {
+        self.a = self.a.wrapping_add(rhs.a);
+        self.b = self.b.wrapping_add(rhs.b);
+        self.c = self.c.wrapping_add(rhs.c);
+        self.d = self.d.wrapping_add(rhs.d);
+        self.e = self.e.wrapping_add(rhs.e);
+        self.f = self.f.wrapping_add(rhs.f);
+        self.g = self.g.wrapping_add(rhs.g);
+        self.h = self.h.wrapping_add(rhs.h);
+    }
+}
+
+#[derive(Clone)]
+struct State {
+    vars: Vars,
+    work: [u32; 64],
+    cursor: usize,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            vars: Vars::default(),
+            work: [0; 64],
+            cursor: 0,
+        }
+    }
+}
+
+// clear memory footprint
+impl Drop for State {
+    fn drop(&mut self) {
+        self.work.fill(0);
+    }
+}
+
+impl State {
+    pub fn update(&mut self, n: u32) {
+        self.work[self.cursor] = n;
+        self.cursor += 1;
+        if self.cursor < 16 {
+            return;
+        }
+        self.expand();
+        self.cursor = 0;
+    }
+
+    pub fn expand(&mut self) {
+        for t in 16..64 {
+            self.work[t] = Self::ssig1(self.work[t - 2])
+                .wrapping_add(Self::ssig0(self.work[t - 15]))
+                .wrapping_add(self.work[t - 7])
+                .wrapping_add(self.work[t - 16]);
+        }
+        self.vars.update(&self.work);
+    }
+
+    pub fn finish(&mut self, n: u32, byte_len: usize) -> [u8; 32] {
+        self.update(n);
+        if self.cursor <= 14 {
+            self.work[self.cursor..14].fill(0);
+            self.fill_len(byte_len);
+            self.expand();
+        } else {
+            self.work[self.cursor..16].fill(0);
+            self.expand();
+            self.work[..14].fill(0);
+            self.fill_len(byte_len);
+            self.expand();
+        }
+        self.vars.digest()
+    }
+
+    fn fill_len(&mut self, byte_len: usize) {
+        let bit_len: u64 = (byte_len as u64) * 8;
+        self.work[14] = (bit_len >> 32) as u32;
+        self.work[15] = bit_len as u32;
+    }
+
+    fn ssig0(x: u32) -> u32 {
+        x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3)
+    }
+
+    fn ssig1(x: u32) -> u32 {
+        x.rotate_right(17) ^ x.rotate_right(19) ^ (x >> 10)
+    }
+}
+
+#[derive(Clone)]
+pub struct Sha256 {
+    state: State,
+    buf: ChunkBuf<u8>,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self {
+            state: State::default(),
+            buf: ChunkBuf::new(4),
+        }
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn write(&mut self, mut buf: &[u8]) -> &mut Self {
+        while let Some(Chunk { bytes, consumed }) = self.buf.update(buf) {
+            let n = u32::from_be_bytes(bytes.try_into().unwrap());
+            self.state.update(n);
+            buf = &buf[consumed..];
+        }
+        self
+    }
+
+    pub fn finish(&mut self) -> [u8; 32] {
+        let n = match self.buf.update(&[0x80]) {
+            Some(Chunk { bytes, .. }) => u32::from_be_bytes(bytes.try_into().unwrap()),
+            None => {
+                let mut last_u32 = [0u8; 4];
+                let remainder = self.buf.remainder();
+                last_u32[..remainder.len()].copy_from_slice(remainder);
+                u32::from_be_bytes(last_u32)
+            }
+        };
+        self.state.finish(n, self.buf.acc_consumed() - 1)
+    }
+
+    #[inline]
+    pub fn write_u8(&mut self, i: u8) -> &mut Self {
+        self.write(&[i])
+    }
+
+    /// Writes a single `u16` into this hasher.
+    #[inline]
+    pub fn write_u16(&mut self, i: u16) -> &mut Self {
+        self.write(&i.to_ne_bytes())
+    }
+
+    /// Writes a single `u32` into this hasher.
+    #[inline]
+    pub fn write_u32(&mut self, i: u32) -> &mut Self {
+        self.write(&i.to_ne_bytes())
+    }
+
+    /// Writes a single `u64` into this hasher.
+    #[inline]
+    pub fn write_u64(&mut self, i: u64) -> &mut Self {
+        self.write(&i.to_ne_bytes())
+    }
+
+    /// Writes a single `u128` into this hasher.
+    #[inline]
+    pub fn write_u128(&mut self, i: u128) -> &mut Self {
+        self.write(&i.to_ne_bytes())
+    }
+
+    /// Writes a single `usize` into this hasher.
+    #[inline]
+    pub fn write_usize(&mut self, i: usize) -> &mut Self {
+        self.write(&i.to_ne_bytes())
+    }
+
+    /// Writes a single `i8` into this hasher.
+    #[inline]
+    pub fn write_i8(&mut self, i: i8) -> &mut Self {
+        self.write_u8(i as u8)
+    }
+
+    /// Writes a single `i16` into this hasher.
+    #[inline]
+    pub fn write_i16(&mut self, i: i16) -> &mut Self {
+        self.write_u16(i as u16)
+    }
+
+    /// Writes a single `i32` into this hasher.
+    #[inline]
+    pub fn write_i32(&mut self, i: i32) -> &mut Self {
+        self.write_u32(i as u32)
+    }
+
+    /// Writes a single `i64` into this hasher.
+    #[inline]
+    pub fn write_i64(&mut self, i: i64) -> &mut Self {
+        self.write_u64(i as u64)
+    }
+
+    /// Writes a single `i128` into this hasher.
+    #[inline]
+    pub fn write_i128(&mut self, i: i128) -> &mut Self {
+        self.write_u128(i as u128)
+    }
+
+    /// Writes a single `isize` into this hasher.
+    #[inline]
+    pub fn write_isize(&mut self, i: isize) -> &mut Self {
+        self.write_usize(i as usize)
+    }
+
+    #[inline]
+    pub fn write_str(&mut self, s: &str) -> &mut Self {
+        self.write(s.as_bytes())
+    }
+}
+
 pub fn sha256(msg: &[u8]) -> [u8; 32] {
-    let msg_bit_len = (msg.len() as u64) * 8;
-    let mut hs: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let mut w = [0u32; 64];
-    let mut chunks = msg.chunks_exact(64);
-    for chunk in chunks.by_ref() {
-        sha256_block(chunk.try_into().unwrap(), &mut hs, &mut w);
-    }
-    let mut padded: [u8; 64] = [0u8; 64];
-    let rem = chunks.remainder();
-    let cursor = rem.len();
-    padded[..cursor].copy_from_slice(rem);
-    if cursor < 56 {
-        padded[rem.len()] = 0x80;
-        padded[56..64].copy_from_slice(&msg_bit_len.to_be_bytes());
-        sha256_block(&padded, &mut hs, &mut w);
-    } else {
-        padded[cursor] = 0x80;
-        sha256_block(&padded, &mut hs, &mut w);
-        padded[0..56].fill(0);
-        padded[56..64].copy_from_slice(&msg_bit_len.to_be_bytes());
-        sha256_block(&padded, &mut hs, &mut w);
-    }
-    let mut ret = [0_u8; 32];
-    for i in (0..32).step_by(4) {
-        ret[i..i + 4].copy_from_slice(&hs[i / 4].to_be_bytes());
-    }
-    ret
-}
-
-pub fn sha256_block(block: &[u8; 64], hs: &mut [u32; 8], w: &mut [u32; 64]) {
-    prepare_message_schedule(block, w);
-    let mut a = hs[0];
-    let mut b = hs[1];
-    let mut c = hs[2];
-    let mut d = hs[3];
-    let mut e = hs[4];
-    let mut f = hs[5];
-    let mut g = hs[6];
-    let mut h = hs[7];
-
-    let mut t1: u32;
-    let mut t2: u32;
-    for i in 0..64 {
-        t1 = h
-            .wrapping_add(bsig1(e))
-            .wrapping_add(ch(e, f, g))
-            .wrapping_add(K[i])
-            .wrapping_add(w[i]);
-        t2 = bsig0(a).wrapping_add(maj(a, b, c));
-        h = g;
-        g = f;
-        f = e;
-        e = d.wrapping_add(t1);
-        d = c;
-        c = b;
-        b = a;
-        a = t1.wrapping_add(t2);
-    }
-    hs[0] = a.wrapping_add(hs[0]);
-    hs[1] = b.wrapping_add(hs[1]);
-    hs[2] = c.wrapping_add(hs[2]);
-    hs[3] = d.wrapping_add(hs[3]);
-    hs[4] = e.wrapping_add(hs[4]);
-    hs[5] = f.wrapping_add(hs[5]);
-    hs[6] = g.wrapping_add(hs[6]);
-    hs[7] = h.wrapping_add(hs[7]);
-}
-
-fn prepare_message_schedule(block: &[u8; 64], w: &mut [u32; 64]) {
-    for (i, chunk) in block.chunks(4).enumerate() {
-        w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
-    }
-    for i in 16..64 {
-        w[i] = ssig1(w[i - 2])
-            .wrapping_add(ssig0(w[i - 15]))
-            .wrapping_add(w[i - 7])
-            .wrapping_add(w[i - 16]);
-    }
-}
-fn ch(x: u32, y: u32, z: u32) -> u32 {
-    (x & y) ^ (!x & z)
-}
-
-fn maj(x: u32, y: u32, z: u32) -> u32 {
-    (x & y) ^ (x & z) ^ (y & z)
-}
-
-fn bsig0(x: u32) -> u32 {
-    x.rotate_right(2) ^ x.rotate_right(13) ^ x.rotate_right(22)
-}
-
-fn bsig1(x: u32) -> u32 {
-    x.rotate_right(6) ^ x.rotate_right(11) ^ x.rotate_right(25)
-}
-
-fn ssig0(x: u32) -> u32 {
-    x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3)
-}
-
-fn ssig1(x: u32) -> u32 {
-    x.rotate_right(17) ^ x.rotate_right(19) ^ (x >> 10)
+    Sha256::new().write(msg).finish()
 }
 
 #[cfg(test)]
@@ -138,15 +349,14 @@ mod tests {
 
     #[test]
     fn len511_string() {
-        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94\
-                        c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce77c8693\
-                        45bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce\
-                        77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a016461\
-                        2b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a\
-                        0164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0\
-                        064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c4\
-                        3b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76\
-                        d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd"
+        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd"
             .as_bytes();
         let expected = "fc1c3103cc791e104373c82520c42cb5266850c8d0504da922b982abe9cc6452";
         let digest = sha256(msg);
@@ -155,13 +365,14 @@ mod tests {
 
     #[test]
     fn len512_string() {
-        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c\
-        75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd33\
-        15f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d\
-        078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac\
-        0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0164\
-        612b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce77c\
-        869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3"
+        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3"
             .as_bytes();
         let expected = "0b221c1e7ae3b092e85829eecbe51205947044701dfa05b7c6f0759b207cebea";
         let digest = sha256(msg);
@@ -170,16 +381,16 @@ mod tests {
 
     #[test]
     fn len513_string() {
-        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc9\
-                        4c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1fce77c86\
-                        9345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0164612b1\
-                        fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0064e4a0\
-                        164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c43b8ac0\
-                        064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d078c4\
-                        3b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bdb76d\
-                        078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3315f5bd\
-                        b76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd33"
-            .as_bytes();
+        let msg = "315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3\
+                        3"
+        .as_bytes();
         let expected = "e39db0e4cc4d81ff74f04dda25d5e2ca3866776d2396fa6e73df1e94d2c14b70";
         let digest = sha256(msg);
         assert_eq!(expected, hex::encode(digest));
