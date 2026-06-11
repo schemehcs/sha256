@@ -1,6 +1,9 @@
 use chunk_buf::{Chunk, ChunkBuf};
 use std::ops::AddAssign;
 
+pub const HASH_LEN: usize = 32;
+pub type HASH = [u8; HASH_LEN];
+
 static K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -82,7 +85,7 @@ impl Vars {
         self.add_assign(cln);
     }
 
-    pub fn digest(&self) -> [u8; 32] {
+    pub fn digest(&self) -> HASH {
         self.a
             .to_be_bytes()
             .into_iter()
@@ -173,7 +176,7 @@ impl State {
         self.vars.update(&self.work);
     }
 
-    pub fn finish(&mut self, n: u32, byte_len: usize) -> [u8; 32] {
+    pub fn finish(&mut self, n: u32, byte_len: usize) -> HASH {
         self.update(n);
         if self.cursor <= 14 {
             self.work[self.cursor..14].fill(0);
@@ -323,7 +326,7 @@ impl Sha256 {
     }
 }
 
-pub fn sha256(msg: &[u8]) -> [u8; 32] {
+pub fn sha256(msg: &[u8]) -> HASH {
     Sha256::new().write(msg).finish()
 }
 
