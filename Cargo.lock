@@ -8,6 +8,11 @@ version = "0.1.0"
 source = "git+https://github.com/schemehcs/chunk-buf.git#4e4e696e9ab6f4fc8d5f7c1c901c06bee7b73b0f"
 
 [[package]]
+name = "hasher-style"
+version = "0.1.0"
+source = "git+https://github.com/schemehcs/hasher-style.git#fc323e4b6844875e41cfb8187f2b641ee6885f96"
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18,5 +23,6 @@ name = "sha256"
 version = "0.1.0"
 dependencies = [
  "chunk-buf",
+ "hasher-style",
  "hex",
 ]
